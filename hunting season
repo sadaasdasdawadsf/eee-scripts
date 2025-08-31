@@ -1,0 +1,266 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+--[[
+    Enhanced ESP Script with performance optimizations and improved functionality
+    Features:
+    - Optimized refresh rate
+    - Memory management
+    - Error handling
+    - Customizable colors
+    - Configurable settings
+    - Better visual formatting
+]]
+
+-- Services
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- Constants
+local SETTINGS = {
+    REFRESH_INTERVAL = 5,
+    UPDATE_INTERVAL = 0.1,
+    BASE_WALK_SPEED = 16,
+    MAX_SPEED_INCREASE = 12,
+    BILLBOARD_SIZE = Vector2.new(150, 60),
+    BILLBOARD_OFFSET = Vector3.new(0, 2, 0),
+    COLORS = {
+        TEXT = Color3.fromRGB(0, 255, 0),
+        STROKE = Color3.fromRGB(0, 0, 0),
+        SELECTION = Color3.fromRGB(0, 255, 0),
+        NOTIFICATION_BG = Color3.fromRGB(0, 0, 0),
+        NOTIFICATION_TEXT = Color3.fromRGB(255, 255, 255)
+    },
+    FONT = Enum.Font.Garamond,
+    TEXT_SIZES = {
+        NAME = 14,
+        INFO = 12,
+        NOTIFICATION = 20
+    },
+    UNITS = {
+        DISTANCE = "m"
+    }
+}
+
+-- Cache
+local Player = Players.LocalPlayer
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+-- State
+local ESPState = {
+    folder = workspace:FindFirstChild("Animals"),
+    billboards = {},
+    active = true,
+    lastUpdate = 0,
+    connections = {}
+}
+
+-- Utility Functions
+local function cleanupConnections()
+    for _, connection in ipairs(ESPState.connections) do
+        if connection.Disconnect then
+            connection:Disconnect()
+        end
+    end
+    ESPState.connections = {}
+end
+
+local function formatNumber(number)
+    return string.format("%.1f", number)
+end
+
+local function createLabel(properties)
+    local label = Instance.new("TextLabel")
+    for key, value in pairs(properties) do
+        label[key] = value
+    end
+    return label
+end
+
+-- Core Functions
+local function showNotification(message, duration)
+    duration = duration or 1.5
+    
+    local notification = createLabel({
+        Text = message,
+        Size = UDim2.new(0, 200, 0, 50),
+        Position = UDim2.new(0.5, -100, 0, 50),
+        BackgroundTransparency = 0.5,
+        BackgroundColor3 = SETTINGS.COLORS.NOTIFICATION_BG,
+        TextColor3 = SETTINGS.COLORS.NOTIFICATION_TEXT,
+        TextSize = SETTINGS.TEXT_SIZES.NOTIFICATION,
+        Font = SETTINGS.FONT,
+        TextStrokeTransparency = 0.5,
+        TextStrokeColor3 = SETTINGS.COLORS.STROKE,
+        Parent = PlayerGui
+    })
+
+    local tween = TweenService:Create(notification, 
+        TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        {Position = UDim2.new(0.5, -100, 0, 0), TextTransparency = 1, BackgroundTransparency = 1}
+    )
+    
+    tween:Play()
+    task.delay(duration, function()
+        notification:Destroy()
+    end)
+end
+
+local function createBillboardGui(model)
+    if not model:IsA("Model") or (not model.PrimaryPart and not model:FindFirstChild("HumanoidRootPart")) then
+        return nil
+    end
+
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Adornee = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+    billboardGui.Size = UDim2.new(0, SETTINGS.BILLBOARD_SIZE.X, 0, SETTINGS.BILLBOARD_SIZE.Y)
+    billboardGui.StudsOffset = SETTINGS.BILLBOARD_OFFSET
+    billboardGui.AlwaysOnTop = true
+
+    -- Name Label
+    local nameLabel = createLabel({
+        Text = model.Name,
+        Size = UDim2.new(1, 0, 0.5, 0),
+        BackgroundTransparency = 1,
+        TextColor3 = SETTINGS.COLORS.TEXT,
+        TextStrokeTransparency = 0,
+        TextStrokeColor3 = SETTINGS.COLORS.STROKE,
+        TextSize = SETTINGS.TEXT_SIZES.NAME,
+        Font = SETTINGS.FONT,
+        Parent = billboardGui
+    })
+
+    -- Distance Label
+    local distanceLabel = createLabel({
+        Size = UDim2.new(1, 0, 0.5, 0),
+        Position = UDim2.new(0, 0, 0.5, 0),
+        BackgroundTransparency = 1,
+        TextColor3 = SETTINGS.COLORS.TEXT,
+        TextStrokeTransparency = 0,
+        TextStrokeColor3 = SETTINGS.COLORS.STROKE,
+        TextSize = SETTINGS.TEXT_SIZES.INFO,
+        Font = SETTINGS.FONT,
+        Text = "Calculating...",
+        Parent = billboardGui
+    })
+
+    -- Selection Box
+    local selectionBox = Instance.new("SelectionBox")
+    selectionBox.Adornee = billboardGui.Adornee
+    selectionBox.LineThickness = 0.1
+    selectionBox.SurfaceTransparency = 0.8
+    selectionBox.Color3 = SETTINGS.COLORS.SELECTION
+    selectionBox.Parent = model
+
+    billboardGui.Parent = model
+    return {
+        gui = billboardGui,
+        distanceLabel = distanceLabel,
+        selectionBox = selectionBox,
+        model = model
+    }
+end
+
+local function refreshVisuals()
+    -- Cleanup existing billboards
+    for _, visualInfo in ipairs(ESPState.billboards) do
+        if visualInfo.gui then visualInfo.gui:Destroy() end
+        if visualInfo.selectionBox then visualInfo.selectionBox:Destroy() end
+    end
+    ESPState.billboards = {}
+
+    -- Create new billboards
+    if ESPState.folder then
+        for _, model in ipairs(ESPState.folder:GetChildren()) do
+            local billboard = createBillboardGui(model)
+            if billboard then
+                table.insert(ESPState.billboards, billboard)
+            end
+        end
+    end
+end
+
+local function updateBillboards()
+    if not ESPState.active or not Character.PrimaryPart then return end
+    
+    local currentTime = time()
+    if currentTime - ESPState.lastUpdate < SETTINGS.UPDATE_INTERVAL then return end
+    ESPState.lastUpdate = currentTime
+
+    for _, visualInfo in ipairs(ESPState.billboards) do
+        if visualInfo.model and visualInfo.model.PrimaryPart then
+            local distance = (visualInfo.model.PrimaryPart.Position - Character.PrimaryPart.Position).Magnitude
+            visualInfo.distanceLabel.Text = string.format("Distance: %s %s", formatNumber(distance), SETTINGS.UNITS.DISTANCE)
+        end
+    end
+end
+
+local function adjustSpeed(amount)
+    local newSpeed = Humanoid.WalkSpeed + amount
+    if newSpeed <= (SETTINGS.BASE_WALK_SPEED + SETTINGS.MAX_SPEED_INCREASE) and newSpeed >= 0 then
+        Humanoid.WalkSpeed = newSpeed
+        showNotification("Walk Speed: " .. math.floor(newSpeed))
+    else
+        showNotification("Speed limit reached!")
+    end
+end
+
+local function toggleESP()
+    ESPState.active = not ESPState.active
+    for _, visualInfo in ipairs(ESPState.billboards) do
+        if visualInfo.gui then
+            visualInfo.gui.Enabled = ESPState.active
+        end
+        if visualInfo.selectionBox then
+            visualInfo.selectionBox.Visible = ESPState.active
+        end
+    end
+    showNotification("ESP " .. (ESPState.active and "Enabled" or "Disabled"))
+end
+
+-- Setup
+local function initialize()
+    -- Clean up existing connections
+    cleanupConnections()
+
+    -- Input handling
+    table.insert(ESPState.connections, UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        
+        if input.KeyCode == Enum.KeyCode.N then
+            adjustSpeed(2)
+        elseif input.KeyCode == Enum.KeyCode.B then
+            adjustSpeed(-2)
+        elseif input.KeyCode == Enum.KeyCode.Q then
+            toggleESP()
+        end
+    end))
+
+    -- Periodic refresh
+    task.spawn(function()
+        while task.wait(SETTINGS.REFRESH_INTERVAL) do
+            if ESPState.active then
+                refreshVisuals()
+            end
+        end
+    end)
+
+    -- Update loop
+    table.insert(ESPState.connections, RunService.RenderStepped:Connect(updateBillboards))
+
+    -- Initial setup
+    refreshVisuals()
+    showNotification("ESP Initialized")
+end
+
+-- Initialize on script load
+initialize()
+
+-- Cleanup on script end
+game:BindToClose(function()
+    cleanupConnections()
+end)
