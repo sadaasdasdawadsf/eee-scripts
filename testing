@@ -86,9 +86,10 @@ local UniversalTab = Window:CreateTab("Main", 4483362458)
 local Aimbot = Window:CreateTab("Aimbot 🎯")
 local AntiAim = Window:CreateTab("Anti-Aim")
 local Misc = Window:CreateTab("Misc")
-local PrisonerLife = Window:CreateTab("Prisoner Life")
+local PrisonerLifeTab = Window:CreateTab("Prisoner Life")
 
 -- Main Tab Features
+local Section = PrisonerLifeTab:CreateSection("Autofarm")
 
 local autofarmToggle = PrisonerLifeTab:CreateToggle({
     Name = "Autofarm Toggle",
